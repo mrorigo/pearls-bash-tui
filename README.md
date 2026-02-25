@@ -189,6 +189,45 @@ These are examples and may require local adaptation before production use.
 - If you use shell paths with `~`, prefer `$HOME` in script variables to avoid literal-tilde path bugs in quoted strings.
 - `scripts/cc-run.sh` currently expects OpenCode CLI and session semantics; review before relying on it for critical workflows.
 
+## Use-Case Scenarios
+
+### Multi-Stage Agent Pipeline (`plan -> execute -> verify`)
+
+Use labels and status-gated scripts to orchestrate a disciplined agent workflow:
+
+1. Create pearls with a stage label such as `plan`.
+2. Configure a script that runs only for `open` pearls and generates an implementation plan, then updates labels to `execute`.
+3. Configure a second script that runs implementation in tmux (`run_in_tmux: true`) and flips labels to `verify`.
+4. Configure a final verification script that runs tests/lints and either closes the pearl or moves it back to `execute`.
+
+This gives you a lightweight state machine without adding a custom orchestrator service.
+
+### Parallel Agent Swarms Per Repo
+
+Use the Tmux Command Center to spin up multiple pearl shell windows in the same repo-scoped tmux session:
+
+- One window per pearl for independent agent runs.
+- Shared session context for quick switching and monitoring.
+- Optional new-terminal launch behavior via `terminal_command`.
+
+This works well for batched backlog reduction or parallel bugfix campaigns.
+
+### Human-in-the-Loop Review Gates
+
+Treat `verify` as a manual approval gate:
+
+- Agent scripts can prepare patches and artifacts.
+- A reviewer attaches to the same tmux window, inspects output/logs, and runs final checks.
+- On approval, run a close/merge script; on rejection, relabel and requeue.
+
+### Incident Response Mode
+
+For production incidents, create pearls by subsystem label (`api`, `db`, `queue`) and launch dedicated tmux windows per pearl. Teams can triage, patch, and validate concurrently while preserving a single issue timeline in Pearls.
+
+### Long-Running Automation Without Losing Context
+
+Run heavy scripts (codegen, migration tests, large integration suites) via tmux-backed actions so sessions survive terminal disconnects. Reattach later from Command Center with full context and logs intact.
+
 ## Troubleshooting
 
 ### `Error: '<cmd>' is not installed or not in PATH.`
