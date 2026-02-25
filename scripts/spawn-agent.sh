@@ -45,6 +45,10 @@ PROMPT_FILE=$(mktemp "${TMP_BASE}/ptui-prompt.XXXXXX" 2>/dev/null || true)
 if [ -z "$PROMPT_FILE" ]; then
     PROMPT_FILE=$(mktemp "/tmp/ptui-prompt.XXXXXX")
 fi
+cleanup_prompt_file() {
+    [ -n "${PROMPT_FILE:-}" ] && rm -f "$PROMPT_FILE"
+}
+trap cleanup_prompt_file EXIT
 
 cat > "$PROMPT_FILE" <<PROMPTEOF
 I have moved Pearl $PEARL_ID to in_progress.
@@ -64,7 +68,6 @@ printf 'Description:\n%s\n' "$PEARL_DESC"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 "$SCRIPT_DIR/cc-run.sh" "$WORKTREE_PATH" "$PEARL_ID" "$PROMPT_FILE"
-rm -f "$PROMPT_FILE"
 
 echo "-----------------------------------"
 echo "Agent session ended."
