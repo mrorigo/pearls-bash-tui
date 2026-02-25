@@ -6,10 +6,10 @@ if [ -z "$PEARL_ID" ] || [ -z "$REPO_PATH" ]; then
     exit 1
 fi
 
-WORKTREE_PATH="~/dev/worktrees/$PEARL_ID"
+WORKTREE_PATH="$HOME/dev/worktrees/$PEARL_ID"
 
 cd "$REPO_PATH" || exit 1
 # Wipe the worktree
-git worktree remove "$WORKTREE_PATH"
+git worktree remove -f "$WORKTREE_PATH"
 
 prl update "$PEARL_ID" --status open

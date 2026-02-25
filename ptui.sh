@@ -21,11 +21,13 @@ if [ ! -f "$CONFIG_FILE" ]; then
   "repos": [
     "$PWD"
   ],
+  "terminal_command": null,
   "scripts": [
     {
       "name": "Spawn Agent",
       "target_status": "open",
-      "command": "$CONFIG_DIR/spawn_agent.sh"
+      "command": "$CONFIG_DIR/spawn_agent.sh",
+      "run_in_tmux": false
     }
   ]
 }
@@ -300,6 +302,246 @@ update_pearl() {
         esac
     done
 }
+sanitize_tmux_name() {
+    local value="$1"
+    value="${value//[^A-Za-z0-9_-]/-}"
+    if [ -z "$value" ]; then
+        value="item"
+    fi
+    printf '%s' "$value"
+}
+
+repo_tmux_session_name() {
+    local repo_slug
+    local repo_hash
+
+    repo_slug=$(sanitize_tmux_name "$(basename "$SELECTED_REPO")")
+    repo_hash=$(printf '%s' "$SELECTED_REPO" | cksum | awk '{print $1}')
+    printf 'ptui-%s-%s' "$repo_slug" "$repo_hash"
+}
+
+pearl_tmux_window_name() {
+    local pearl_id="$1"
+    sanitize_tmux_name "$pearl_id"
+}
+
+build_tmux_script_command() {
+    local pearl_id="$1"
+    local script_cmd="$2"
+    printf 'cd %q || exit 1; export REPO_PATH=%q; export PEARL_ID=%q; eval %q' "$SELECTED_REPO" "$SELECTED_REPO" "$pearl_id" "$script_cmd"
+}
+
+build_tmux_shell_command() {
+    local pearl_id="$1"
+    printf 'cd %q || exit 1; export REPO_PATH=%q; export PEARL_ID=%q; exec "${SHELL:-bash}" -l' "$SELECTED_REPO" "$SELECTED_REPO" "$pearl_id"
+}
+
+attach_tmux_target() {
+    local target="$1"
+    echo "Detach with Ctrl-b d"
+    read -n 1 -s -r -p "Press any key to attach..."
+    tmux attach-session -t "$target"
+}
+open_new_terminal_with_tmux_target() {
+    local target="$1"
+    local attach_cmd
+    local configured_terminal_cmd
+
+    attach_cmd=$(printf 'tmux attach-session -t %q' "$target")
+    configured_terminal_cmd=$(jq -r '.terminal_command // empty' "$CONFIG_FILE" 2>/dev/null)
+
+    if [ -n "$configured_terminal_cmd" ] && [ "$configured_terminal_cmd" != "null" ]; then
+        configured_terminal_cmd="${configured_terminal_cmd//\{\{TMUX_TARGET\}\}/$target}"
+        configured_terminal_cmd="${configured_terminal_cmd//\{\{TMUX_ATTACH_CMD\}\}/$attach_cmd}"
+        eval "$configured_terminal_cmd"
+        return $?
+    fi
+
+    if [ "$(uname -s)" = "Darwin" ] && command -v osascript &> /dev/null; then
+        osascript -e 'tell application "Terminal" to activate' \
+                  -e "tell application \"Terminal\" to do script \"tmux attach-session -t $target\""
+        return $?
+    fi
+
+    if command -v x-terminal-emulator &> /dev/null; then
+        x-terminal-emulator -e "tmux attach-session -t $target" >/dev/null 2>&1 &
+        return $?
+    fi
+
+    echo "Unable to open a new terminal automatically on this platform."
+    echo "Configure terminal_command in $CONFIG_FILE or run manually: tmux attach-session -t $target"
+    return 1
+}
+
+ensure_tmux_for_script() {
+    local pearl_id="$1"
+    local script_cmd="$2"
+    local tmux_session
+    local tmux_window
+    local tmux_cmd
+
+    tmux_session=$(repo_tmux_session_name)
+    tmux_window=$(pearl_tmux_window_name "$pearl_id")
+    tmux_cmd=$(build_tmux_script_command "$pearl_id" "$script_cmd")
+
+    if tmux has-session -t "$tmux_session" 2>/dev/null; then
+        if tmux list-windows -t "$tmux_session" -F '#W' | grep -Fxq "$tmux_window"; then
+            echo "Attaching to existing tmux window: ${tmux_session}:${tmux_window}"
+        else
+            tmux new-window -t "$tmux_session" -n "$tmux_window" "$tmux_cmd"
+            echo "Started tmux window: ${tmux_session}:${tmux_window}"
+        fi
+    else
+        tmux new-session -d -s "$tmux_session" -n "$tmux_window" "$tmux_cmd"
+        echo "Started tmux session/window: ${tmux_session}:${tmux_window}"
+    fi
+
+    printf '%s:%s\n' "$tmux_session" "$tmux_window"
+}
+
+create_new_tmux_shell_window() {
+    local pearl_id="$1"
+    local tmux_session
+    local tmux_base_window
+    local tmux_window
+    local tmux_cmd
+    local suffix
+
+    tmux_session=$(repo_tmux_session_name)
+    tmux_base_window=$(pearl_tmux_window_name "$pearl_id")
+    tmux_window="${tmux_base_window}-shell"
+
+    if tmux has-session -t "$tmux_session" 2>/dev/null; then
+        suffix=2
+        while tmux list-windows -t "$tmux_session" -F '#W' | grep -Fxq "$tmux_window"; do
+            tmux_window="${tmux_base_window}-shell-${suffix}"
+            suffix=$((suffix + 1))
+        done
+    fi
+
+    tmux_cmd=$(build_tmux_shell_command "$pearl_id")
+
+    if tmux has-session -t "$tmux_session" 2>/dev/null; then
+        tmux new-window -t "$tmux_session" -n "$tmux_window" "$tmux_cmd"
+        echo "Started tmux window: ${tmux_session}:${tmux_window}"
+    else
+        tmux new-session -d -s "$tmux_session" -n "$tmux_window" "$tmux_cmd"
+        echo "Started tmux session/window: ${tmux_session}:${tmux_window}"
+    fi
+
+    printf '%s:%s\n' "$tmux_session" "$tmux_window"
+}
+
+select_pearl_id_for_tmux_window() {
+    local json_data
+    local items_json
+    local selected_line
+    local pearl_id
+
+    json_data=$(prl list --status open --json 2>/dev/null)
+    items_json=$(echo "$json_data" | jq -c 'if type == "object" and has("pearls") then .pearls else . end' 2>/dev/null)
+
+    if [ -n "$items_json" ] && [ "$items_json" != "null" ] && [ "$items_json" != "[]" ]; then
+        selected_line=$(echo "$items_json" | jq -r '.[] | "[\(.id)] (\(.status)) \(.title)"' | fzf --prompt="Pearl for new shell: " --height=60% --layout=reverse)
+        if [ -n "$selected_line" ]; then
+            pearl_id=$(echo "$selected_line" | awk -F'[][]' '{print $2}')
+            printf '%s\n' "$pearl_id"
+            return 0
+        fi
+    fi
+
+    read -rp "Pearl ID for new shell window: " pearl_id
+    if [ -n "$pearl_id" ]; then
+        printf '%s\n' "$pearl_id"
+        return 0
+    fi
+
+    return 1
+}
+
+tmux_command_center() {
+    if ! command -v tmux &> /dev/null; then
+        echo "tmux is required, but it is not installed."
+        read -n 1 -s -r -p "Press any key to continue..."
+        return
+    fi
+
+    local repo_session
+    local choice
+    local target
+    local session
+    local window
+    local sessions
+    local new_pearl_id
+
+    repo_session=$(repo_tmux_session_name)
+
+    while true; do
+        choice=$(printf "Attach Here (Current Repo Session)\nOpen New Terminal (Current Repo Session)\nNew Pearl Shell (Attach Here)\nNew Pearl Shell (Open New Terminal)\nAttach Here (Pick ptui Session/Window)\nOpen New Terminal (Pick ptui Session/Window)\nBack" | fzf --prompt="Tmux Command Center: " --height=55% --layout=reverse)
+
+        case "$choice" in
+            "Back"|"")
+                return
+                ;;
+            "Attach Here (Current Repo Session)")
+                if ! tmux has-session -t "$repo_session" 2>/dev/null; then
+                    echo "No tmux session for current repo: $repo_session"
+                    read -n 1 -s -r -p "Press any key to continue..."
+                    continue
+                fi
+                tmux attach-session -t "$repo_session"
+                ;;
+            "Open New Terminal (Current Repo Session)")
+                if ! tmux has-session -t "$repo_session" 2>/dev/null; then
+                    echo "No tmux session for current repo: $repo_session"
+                    read -n 1 -s -r -p "Press any key to continue..."
+                    continue
+                fi
+                open_new_terminal_with_tmux_target "$repo_session"
+                read -n 1 -s -r -p "Press any key to continue..."
+                ;;
+            "New Pearl Shell (Attach Here)"|"New Pearl Shell (Open New Terminal)")
+                new_pearl_id=$(select_pearl_id_for_tmux_window) || continue
+                target=$(create_new_tmux_shell_window "$new_pearl_id")
+
+                if [ "$choice" = "New Pearl Shell (Attach Here)" ]; then
+                    tmux attach-session -t "$target"
+                else
+                    open_new_terminal_with_tmux_target "$target"
+                    read -n 1 -s -r -p "Press any key to continue..."
+                fi
+                ;;
+            "Attach Here (Pick ptui Session/Window)"|"Open New Terminal (Pick ptui Session/Window)")
+                sessions=$(tmux list-sessions -F '#S' 2>/dev/null | grep '^ptui-' || true)
+                if [ -z "$sessions" ]; then
+                    echo "No ptui tmux sessions found."
+                    read -n 1 -s -r -p "Press any key to continue..."
+                    continue
+                fi
+
+                session=$(echo "$sessions" | fzf --prompt="Tmux session: " --height=35% --layout=reverse)
+                if [ -z "$session" ]; then
+                    continue
+                fi
+
+                window=$(printf "[Session default]\n%s\n" "$(tmux list-windows -t "$session" -F '#W' 2>/dev/null)" | fzf --prompt="Tmux window: " --height=40% --layout=reverse)
+                if [ -z "$window" ] || [ "$window" = "[Session default]" ]; then
+                    target="$session"
+                else
+                    target="$session:$window"
+                fi
+
+                if [ "$choice" = "Attach Here (Pick ptui Session/Window)" ]; then
+                    tmux attach-session -t "$target"
+                else
+                    open_new_terminal_with_tmux_target "$target"
+                    read -n 1 -s -r -p "Press any key to continue..."
+                fi
+                ;;
+        esac
+    done
+}
+
 action_menu() {
     local pearl_id=$1
     local pearl_status=$2
@@ -316,19 +558,16 @@ action_menu() {
 
         clear
         echo "=== Pearl: $pearl_id ($pearl_status) ==="
-        # Show plain format details
         prl show "$pearl_id" --format plain
         echo "----------------------------------------"
 
-        # Find scripts matching this status
         local valid_scripts
-        valid_scripts=$(jq -r --arg status "$pearl_status" '.scripts[] | select(.target_status == $status or .target_status == "any") | "\(.name)|\(.command)"' "$CONFIG_FILE")
+        valid_scripts=$(jq -r --arg status "$pearl_status" '.scripts[] | select(.target_status == $status or .target_status == "any") | [.name, .command, ((.run_in_tmux // false) | tostring)] | @tsv' "$CONFIG_FILE")
 
         local options="[Update Pearl]\n[View JSON]\n[Back]"
         if [ -n "$valid_scripts" ]; then
-            # Extract just the script names for the menu
             local script_names
-            script_names=$(echo "$valid_scripts" | cut -d'|' -f1 | sed 's/^/[Run] /')
+            script_names=$(echo "$valid_scripts" | awk -F'\t' '{print "[Run] " $1}')
             options="$script_names\n$options"
         fi
 
@@ -344,16 +583,32 @@ action_menu() {
                 prl show "$pearl_id" --json | jq . | less
                 ;;
             "[Run]"*)
-                # Extract the pure name and find the corresponding command
                 local chosen_name="${choice#\[Run\] }"
+                local script_record
                 local script_cmd
-                script_cmd=$(echo "$valid_scripts" | awk -F'|' -v name="$chosen_name" '$1 == name { print substr($0, index($0, "|") + 1); exit }')
+                local run_in_tmux
+                script_record=$(echo "$valid_scripts" | awk -F'\t' -v name="$chosen_name" '$1 == name { print $0; exit }')
+                script_cmd=$(echo "$script_record" | awk -F'\t' '{print $2}')
+                run_in_tmux=$(echo "$script_record" | awk -F'\t' '{print $3}')
 
                 if [ -n "$script_cmd" ]; then
                     clear
                     echo "Executing: $chosen_name..."
                     export REPO_PATH="$SELECTED_REPO"
                     export PEARL_ID="$pearl_id"
+
+                    if [ "$run_in_tmux" = "true" ]; then
+                        if ! command -v tmux &> /dev/null; then
+                            echo "tmux is required for this script, but it is not installed."
+                            read -n 1 -s -r -p "Press any key to continue..."
+                            return
+                        fi
+
+                        local tmux_target
+                        tmux_target=$(ensure_tmux_for_script "$pearl_id" "$script_cmd")
+                        attach_tmux_target "$tmux_target"
+                        return
+                    fi
 
                     local run_log
                     local run_rc
@@ -374,7 +629,6 @@ action_menu() {
                         return
                     fi
 
-                    # Run from selected repo and capture both live output and a log for postmortem.
                     (
                         cd "$SELECTED_REPO" || exit 1
                         eval "$script_cmd"
@@ -399,7 +653,7 @@ action_menu() {
                     if [ "$post_run_action" = "View full log" ]; then
                         less "$run_log"
                     fi
-                    return # Exit action menu after running a script
+                    return
                 else
                     echo "Unable to resolve script command for: $chosen_name"
                     read -n 1 -s -r -p "Press any key to continue..."
@@ -408,7 +662,6 @@ action_menu() {
         esac
     done
 }
-
 list_pearls() {
     local list_type=$1
     local json_data
@@ -460,13 +713,14 @@ while true; do
     echo " Repo: $(basename "$SELECTED_REPO")"
     echo "====================================="
 
-    main_choice=$(printf "1. Ready Queue\n2. All Open\n3. Create New Pearl\n4. Change Repo\n5. Exit" | fzf --prompt="Menu: " --height=30% --layout=reverse)
+    main_choice=$(printf "1. Ready Queue\n2. All Open\n3. Create New Pearl\n4. Change Repo\n5. Tmux Command Center\n6. Exit" | fzf --prompt="Menu: " --height=35% --layout=reverse)
 
     case "$main_choice" in
         "1. Ready Queue") list_pearls "ready" ;;
         "2. All Open") list_pearls "open" ;;
         "3. Create New Pearl") create_pearl ;;
         "4. Change Repo") select_repo ;;
-        "5. Exit"|"") clear; exit 0 ;;
+        "5. Tmux Command Center") tmux_command_center ;;
+        "6. Exit"|"") clear; exit 0 ;;
     esac
 done

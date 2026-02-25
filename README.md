@@ -33,6 +33,7 @@ Optional (if using bundled automation scripts):
 
 - `git`
 - `opencode`
+- `tmux` (only for scripts with `run_in_tmux: true`)
 
 ## Installation
 
@@ -71,7 +72,7 @@ On first run, it creates:
 Default config includes:
 
 - One repo: the current directory (`$PWD` at first launch)
-- One sample script action named `Spawn Agent`
+- One sample script action named `Spawn Agent` with `run_in_tmux: false`
 
 ## Configuration
 
@@ -84,10 +85,14 @@ ${XDG_CONFIG_HOME:-$HOME/.config}/ptui/config.json
 Schema:
 
 - `repos`: array of absolute repo paths
+- `terminal_command` (optional): command used when opening a new terminal from `Tmux Command Center`.
+  - Supports `{{TMUX_TARGET}}` placeholder for raw target (for example `ptui-repo-123:prl-45`).
+  - Supports `{{TMUX_ATTACH_CMD}}` placeholder for a shell-escaped attach command.
 - `scripts`: array of script descriptors
   - `name`: menu label
   - `target_status`: one of a specific status (`open`, `in_progress`, `blocked`, `deferred`, `closed`) or `any`
   - `command`: shell command to execute
+  - `run_in_tmux` (optional): when `true`, run in tmux (session is per repository, window is per pearl ID) (default `false`)
 
 Example:
 
@@ -97,21 +102,25 @@ Example:
     "/Users/me/src/project-a",
     "/Users/me/src/project-b"
   ],
+  "terminal_command": "osascript -e 'tell application \\"Terminal\\" to do script \\"{{TMUX_ATTACH_CMD}}\\"'",
   "scripts": [
     {
       "name": "Start Agent",
       "target_status": "open",
-      "command": "/Users/me/src/pearls-tui/scripts/spawn-agent.sh"
+      "command": "/Users/me/src/pearls-tui/scripts/spawn-agent.sh",
+      "run_in_tmux": true
     },
     {
       "name": "Reopen in Triage",
       "target_status": "blocked",
-      "command": "prl update \"$PEARL_ID\" --status open"
+      "command": "prl update \"$PEARL_ID\" --status open",
+      "run_in_tmux": false
     },
     {
       "name": "Echo Context",
       "target_status": "any",
-      "command": "echo Repo=$REPO_PATH Pearl=$PEARL_ID"
+      "command": "echo Repo=$REPO_PATH Pearl=$PEARL_ID",
+      "run_in_tmux": false
     }
   ]
 }
@@ -126,12 +135,17 @@ When you run a configured action from the issue screen, `ptui` exports:
 
 Scripts run from `REPO_PATH`.
 
-Output behavior:
+Execution behavior:
 
-- stdout/stderr are streamed live to terminal
-- output is also captured to a temp log file
-- on failure, the log is opened automatically
-- after execution, you can choose to view the full log
+- If `run_in_tmux` is `false` (default):
+  - stdout/stderr are streamed live to terminal
+  - output is also captured to a temp log file
+  - on failure, the log is opened automatically
+  - after execution, you can choose to view the full log
+- If `run_in_tmux` is `true`:
+  - `ptui` starts or reuses a repository-scoped tmux session named `ptui-<repo>-<hash>`
+  - `ptui` creates or reuses a pearl-scoped window named `<PEARL_ID>`, then attaches immediately
+  - detach with `Ctrl-b d` and reattach later with `tmux attach -t ptui-<repo>-<hash>` and select the pearl window
 
 ## Main Menu Flow
 
@@ -139,7 +153,8 @@ Output behavior:
 2. `All Open`: shows open issues from `prl list --status open --json`
 3. `Create New Pearl`: prompts title/priority/labels + editor description
 4. `Change Repo`: re-open repository picker
-5. `Exit`
+5. `Tmux Command Center`: attach to tmux here or open a new terminal attached to repo/selected ptui sessions
+6. `Exit`
 
 Issue action menu includes:
 
@@ -147,6 +162,16 @@ Issue action menu includes:
 - `[View JSON]`
 - `[Run] <Script Name>` for matching script rules
 - `[Back]`
+
+`Tmux Command Center` supports:
+
+- Attach in the current terminal to the current repo tmux session
+- Open a new terminal attached to the current repo tmux session
+- Create a new pearl shell window and attach in the current terminal
+- Create a new pearl shell window and open it in a new terminal
+- Pick any `ptui-*` session/window and attach in the current terminal
+- Pick any `ptui-*` session/window and open it in a new terminal
+- New-terminal actions use `terminal_command` when configured; otherwise ptui falls back to built-in defaults.
 
 ## Bundled Scripts
 
@@ -184,6 +209,10 @@ Check `config.json` has at least one valid path in `repos`.
 ### `mktemp` / log file errors while running scripts
 
 Use the current `ptui.sh` from this repository (contains a hardened temp-log creation path and fallback).
+
+### `tmux is required, but it is not installed.`
+
+Install tmux, or avoid tmux-based actions (`run_in_tmux: true` and `Tmux Command Center` terminal actions).
 
 ### `prl` commands fail
 

@@ -11,7 +11,7 @@ fi
 WORKTREE_PATH="$1"
 PEARL_ID="$2"
 PROMPT_INPUT="$3"
-MAP_FILE=".opencode_sessions"
+MAP_FILE="../.opencode_session-$PEARL_ID"
 
 cd "$WORKTREE_PATH"
 
@@ -21,7 +21,7 @@ if [ ! -f "$MAP_FILE" ]; then
 fi
 
 if [ -f "$PROMPT_INPUT" ]; then
-    PROMPT=$(cat "$PROMPT_INPUT")
+    PROMPT="--file $PROMPT_INPUT")
 else
     PROMPT="$PROMPT_INPUT"
 fi
@@ -30,11 +30,11 @@ fi
 SESSION_ID=$(awk -F':' -v id="$PEARL_ID" '$1 == id { print $2; exit }' "$MAP_FILE")
 
 if [ -n "$SESSION_ID" ]; then
-    opencode run --session "$SESSION_ID" "$PROMPT"
+    opencode run --log-level DEBUG --continue --thinking --session "$SESSION_ID" "$PROMPT"
     echo "Resumed existing mapped session: $SESSION_ID"
 else
     # Create a new session (OpenCode generates the ID natively)
-    opencode run "$PROMPT"
+    opencode run --log-level DEBUG --thinking "$PROMPT"
 
     # Fetch the newly generated session ID (requires jq)
     NEW_SESSION_ID=$(opencode session list --max-count 1 --format json | jq -r '.[0].id')
