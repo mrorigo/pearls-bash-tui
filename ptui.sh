@@ -12,11 +12,11 @@ done
 # --- Configuration Setup ---
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/ptui"
 CONFIG_FILE="$CONFIG_DIR/config.json"
-EDITOR="${EDITOR:-nano}"
+EDITOR="${EDITOR:-vi}"
 
 mkdir -p "$CONFIG_DIR"
 if [ ! -f "$CONFIG_FILE" ]; then
-    cat <<EOF > "$CONFIG_FILE"
+    cat <<CFGEOF > "$CONFIG_FILE"
 {
   "repos": [
     "$PWD"
@@ -29,7 +29,7 @@ if [ ! -f "$CONFIG_FILE" ]; then
     }
   ]
 }
-EOF
+CFGEOF
     echo "Created default config at $CONFIG_FILE"
 fi
 
@@ -45,7 +45,7 @@ select_repo() {
     fi
 
     # Single repo auto-select, otherwise fzf
-    if [ $(echo "$repos" | wc -l) -eq 1 ]; then
+    if [ "$(echo "$repos" | wc -l)" -eq 1 ]; then
         SELECTED_REPO="$repos"
     else
         SELECTED_REPO=$(echo "$repos" | fzf --prompt="📂 Select Repository: " --height=40% --layout=reverse)
@@ -69,7 +69,7 @@ create_pearl() {
     # Use editor for the markdown description
     desc_file=$(mktemp)
     echo -e "\n\n# Add your description above. Save and exit to create." > "$desc_file"
-    $EDITOR "$desc_file"
+    "$EDITOR" "$desc_file"
 
     # Strip the helper text
     sed -i.bak '/# Add your description above./d' "$desc_file"
@@ -85,11 +85,130 @@ create_pearl() {
     read -n 1 -s -r -p "Press any key to continue..."
 }
 
+update_pearl() {
+    local pearl_id=$1
+    local current_json
+    local current_title
+    local current_priority
+    local current_status
+    local current_labels
+    local current_desc
+
+    current_json=$(prl show "$pearl_id" --json 2>/dev/null)
+    if [ -z "$current_json" ]; then
+        echo "Failed to load Pearl $pearl_id"
+        read -n 1 -s -r -p "Press any key to continue..."
+        return
+    fi
+
+    current_title=$(echo "$current_json" | jq -r '.title // ""')
+    current_priority=$(echo "$current_json" | jq -r '.priority // ""')
+    current_status=$(echo "$current_json" | jq -r '.status // ""')
+    current_labels=$(echo "$current_json" | jq -r '(.labels // []) | join(",")')
+    current_desc=$(echo "$current_json" | jq -r '.description // ""')
+
+    clear
+    echo "=== Update Pearl: $pearl_id ==="
+    echo "Leave fields blank to keep current values."
+    echo
+
+    read -rp "Title [$current_title]: " new_title
+    read -rp "Priority [$current_priority]: " new_priority
+
+    local new_status
+    new_status=$(printf "[Keep current: %s]\nopen\nin_progress\nblocked\ndeferred\nclosed" "$current_status" | fzf --prompt="Status: " --height=35% --layout=reverse)
+    if [ -z "$new_status" ]; then
+        new_status="[Keep current: $current_status]"
+    fi
+
+    read -rp "Add labels (comma-separated, optional): " add_labels
+    read -rp "Remove labels (comma-separated, optional): " remove_labels
+
+    local edit_desc
+    local edit_with_editor_option
+    edit_with_editor_option="Edit in $EDITOR"
+    edit_desc=$(printf "No\n%s\nClear description" "$edit_with_editor_option" | fzf --prompt="Description: " --height=30% --layout=reverse)
+
+    local desc_file=""
+    if [ "$edit_desc" = "$edit_with_editor_option" ]; then
+        desc_file=$(mktemp)
+        printf "%s\n" "$current_desc" > "$desc_file"
+        "$EDITOR" "$desc_file"
+    elif [ "$edit_desc" = "Clear description" ]; then
+        desc_file=$(mktemp)
+        : > "$desc_file"
+    fi
+
+    local cmd
+    local has_changes=0
+    cmd=("prl" "update" "$pearl_id")
+
+    if [ -n "$new_title" ]; then
+        cmd+=("--title" "$new_title")
+        has_changes=1
+    fi
+
+    if [ -n "$new_priority" ]; then
+        cmd+=("--priority" "$new_priority")
+        has_changes=1
+    fi
+
+    if [ "$new_status" != "[Keep current: $current_status]" ]; then
+        cmd+=("--status" "$new_status")
+        has_changes=1
+    fi
+
+    if [ -n "$add_labels" ]; then
+        cmd+=("--add-label" "$add_labels")
+        has_changes=1
+    fi
+
+    if [ -n "$remove_labels" ]; then
+        cmd+=("--remove-label" "$remove_labels")
+        has_changes=1
+    fi
+
+    if [ -n "$desc_file" ]; then
+        cmd+=("--description-file" "$desc_file")
+        has_changes=1
+    fi
+
+    if [ "$has_changes" -eq 0 ]; then
+        echo "No changes selected."
+        [ -n "$desc_file" ] && rm -f "$desc_file"
+        read -n 1 -s -r -p "Press any key to continue..."
+        return
+    fi
+
+    clear
+    echo "Updating Pearl..."
+    "${cmd[@]}"
+    local rc=$?
+
+    [ -n "$desc_file" ] && rm -f "$desc_file"
+
+    if [ "$rc" -ne 0 ]; then
+        echo
+        echo "Update failed (exit code $rc)."
+    fi
+
+    read -n 1 -s -r -p "Press any key to continue..."
+}
+
 action_menu() {
     local pearl_id=$1
     local pearl_status=$2
 
     while true; do
+        local current_json
+        local refreshed_status
+
+        current_json=$(prl show "$pearl_id" --json 2>/dev/null)
+        refreshed_status=$(echo "$current_json" | jq -r '.status // empty' 2>/dev/null)
+        if [ -n "$refreshed_status" ]; then
+            pearl_status="$refreshed_status"
+        fi
+
         clear
         echo "=== Pearl: $pearl_id ($pearl_status) ==="
         # Show plain format details
@@ -100,7 +219,7 @@ action_menu() {
         local valid_scripts
         valid_scripts=$(jq -r --arg status "$pearl_status" '.scripts[] | select(.target_status == $status or .target_status == "any") | "\(.name)|\(.command)"' "$CONFIG_FILE")
 
-        local options="[View JSON]\n[Back]"
+        local options="[Update Pearl]\n[View JSON]\n[Back]"
         if [ -n "$valid_scripts" ]; then
             # Extract just the script names for the menu
             local script_names
@@ -109,10 +228,13 @@ action_menu() {
         fi
 
         local choice
-        choice=$(echo -e "$options" | fzf --prompt="Action for $pearl_id: " --height=30% --layout=reverse)
+        choice=$(echo -e "$options" | fzf --prompt="Action for $pearl_id: " --height=35% --layout=reverse)
 
         case "$choice" in
             "[Back]"|"") return ;;
+            "[Update Pearl]")
+                update_pearl "$pearl_id"
+                ;;
             "[View JSON]")
                 prl show "$pearl_id" --json | jq . | less
                 ;;
