@@ -222,13 +222,20 @@ These scripts form a concrete workflow for Epic decomposition and stage-based ex
     - `stage:verification`
   - Links dependencies so stage order is enforced
 - `spawn-agent.sh`
-  - Creates/reuses a worktree at `$HOME/dev/worktrees/$PEARL_ID`
+  - Resolves an execution context ID:
+    - `epic:<id>` label => shared context `<id>`
+    - no `epic:` label => context is current `PEARL_ID`
+  - Creates/reuses worktree at `$HOME/dev/worktrees/<execution-context-id>`
+  - Uses branch `agent/<execution-context-id>`
   - Moves pearl status from `open` to `in_progress` (when applicable)
   - Reads stage label and builds a stage-specific prompt
   - Calls `oc-run.sh` to run OpenCode and log output
 - `remove-worktree.sh`
-  - Removes the per-pearl worktree
-  - Moves pearl status back to `open`
+  - Resolves the same execution context ID used by `spawn-agent.sh`
+  - Removes worktree for that context
+  - Blocks shared-context removal if sibling subtasks with same `epic:<id>` are `in_progress`
+  - Allows override with `PTUI_FORCE_REMOVE=1`
+  - Moves current pearl status back to `open`
 - `oc-run.sh`
   - Runs `opencode run` with JSON output
   - Persists a log file and appends final response text as a pearl comment
@@ -253,13 +260,18 @@ flowchart TD
 
 ### Stage Execution Flow
 
-`spawn-agent.sh` uses stage labels to route work and preserve isolated repo context.
+`spawn-agent.sh` uses stage labels and an execution context resolver to route work. Subtasks labeled `epic:<id>` share one branch/worktree (`agent/<id>`, `$HOME/dev/worktrees/<id>`).
 
 ```mermaid
 flowchart TD
     A[Run script from ptui] --> B[spawn-agent.sh]
-    B --> C[Ensure worktree: $HOME/dev/worktrees/$PEARL_ID]
-    C --> D[Set status: open -> in_progress]
+    B --> C{Resolve execution context}
+    C -->|epic:<id>| C1[Use <id>]
+    C -->|no epic label| C2[Use PEARL_ID]
+    C1 --> C3[Ensure worktree: $HOME/dev/worktrees/<id>]
+    C2 --> C4[Ensure worktree: $HOME/dev/worktrees/PEARL_ID]
+    C3 --> D[Set status: open -> in_progress]
+    C4 --> D
     D --> E{Stage label}
 
     E -->|stage:planning| P[Prompt: write ISSUE_PLAN.md]
@@ -307,6 +319,15 @@ flowchart TD
 }
 ```
 
+### Execution Context Resolution
+
+- If a pearl has exactly one `epic:<id>` label, scripts use `<id>` as the execution context.
+- Context determines both branch and worktree:
+  - branch: `agent/<context-id>`
+  - worktree: `$HOME/dev/worktrees/<context-id>`
+- If no `epic:` label exists, scripts use the pearl's own ID, preserving per-pearl behavior for non-epic work.
+- If more than one `epic:` label exists, scripts fail fast with an error.
+
 ### Notes
 
 - Ensure config `command` paths point to real files on your machine.
@@ -353,6 +374,16 @@ Then validate:
 
 ```bash
 jq . "${XDG_CONFIG_HOME:-$HOME/.config}/ptui/config.json"
+```
+
+### Shared-context worktree removal is blocked
+
+If `remove-worktree.sh` detects sibling subtasks with the same `epic:<id>` in `in_progress`, it blocks removal by default to avoid deleting an active shared worktree.
+
+Override only when intentional:
+
+```bash
+PTUI_FORCE_REMOVE=1 /path/to/remove-worktree.sh
 ```
 
 ### `prl` commands fail
