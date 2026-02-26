@@ -349,6 +349,8 @@ open_new_terminal_with_tmux_target() {
 
     attach_cmd=$(printf 'tmux attach-session -t %q' "$target")
     configured_terminal_cmd=$(jq -r '.terminal_command // empty' "$CONFIG_FILE" 2>/dev/null)
+    configured_terminal_cmd="${configured_terminal_cmd//$'\r'/}"
+    configured_terminal_cmd="${configured_terminal_cmd//$'\n'/ }"
 
     if [ -n "$configured_terminal_cmd" ] && [ "$configured_terminal_cmd" != "null" ]; then
         configured_terminal_cmd="${configured_terminal_cmd//\{\{TMUX_TARGET\}\}/$target}"
@@ -386,14 +388,14 @@ ensure_tmux_for_script() {
 
     if tmux has-session -t "$tmux_session" 2>/dev/null; then
         if tmux list-windows -t "$tmux_session" -F '#W' | grep -Fxq "$tmux_window"; then
-            echo "Attaching to existing tmux window: ${tmux_session}:${tmux_window}"
+            echo "Attaching to existing tmux window: ${tmux_session}:${tmux_window}" >&2
         else
             tmux new-window -t "$tmux_session" -n "$tmux_window" "$tmux_cmd"
-            echo "Started tmux window: ${tmux_session}:${tmux_window}"
+            echo "Started tmux window: ${tmux_session}:${tmux_window}" >&2
         fi
     else
         tmux new-session -d -s "$tmux_session" -n "$tmux_window" "$tmux_cmd"
-        echo "Started tmux session/window: ${tmux_session}:${tmux_window}"
+        echo "Started tmux session/window: ${tmux_session}:${tmux_window}" >&2
     fi
 
     printf '%s:%s\n' "$tmux_session" "$tmux_window"
@@ -423,10 +425,10 @@ create_new_tmux_shell_window() {
 
     if tmux has-session -t "$tmux_session" 2>/dev/null; then
         tmux new-window -t "$tmux_session" -n "$tmux_window" "$tmux_cmd"
-        echo "Started tmux window: ${tmux_session}:${tmux_window}"
+        echo "Started tmux window: ${tmux_session}:${tmux_window}" >&2
     else
         tmux new-session -d -s "$tmux_session" -n "$tmux_window" "$tmux_cmd"
-        echo "Started tmux session/window: ${tmux_session}:${tmux_window}"
+        echo "Started tmux session/window: ${tmux_session}:${tmux_window}" >&2
     fi
 
     printf '%s:%s\n' "$tmux_session" "$tmux_window"
@@ -459,6 +461,35 @@ select_pearl_id_for_tmux_window() {
     return 1
 }
 
+
+summarize_tmux_repo_session() {
+    local repo_session="$1"
+    local window_count
+    local window_preview
+    local display_limit
+
+    if ! tmux has-session -t "$repo_session" 2>/dev/null; then
+        printf 'not running'
+        return
+    fi
+
+    window_count=$(tmux list-windows -t "$repo_session" -F '#W' 2>/dev/null | wc -l | tr -d '[:space:]')
+    window_preview=$(tmux list-windows -t "$repo_session" -F '#W' 2>/dev/null)
+    display_limit=3
+    window_preview=$(printf '%s\n' "$window_preview" | head -n "$display_limit" | paste -sd ', ' -)
+
+    if [ -z "$window_preview" ]; then
+        printf 'running (%s windows)' "$window_count"
+        return
+    fi
+
+    if [ "$window_count" -gt "$display_limit" ]; then
+        window_preview="${window_preview}, ..."
+    fi
+
+    printf 'running (%s windows: %s)' "$window_count" "$window_preview"
+}
+
 tmux_command_center() {
     if ! command -v tmux &> /dev/null; then
         echo "tmux is required, but it is not installed."
@@ -473,20 +504,37 @@ tmux_command_center() {
     local window
     local sessions
     local new_pearl_id
+    local repo_session_status
+    local ptui_session_count
+    local create_missing_choice
 
     repo_session=$(repo_tmux_session_name)
 
     while true; do
-        choice=$(printf "Attach Here (Current Repo Session)\nOpen New Terminal (Current Repo Session)\nNew Pearl Shell (Attach Here)\nNew Pearl Shell (Open New Terminal)\nAttach Here (Pick ptui Session/Window)\nOpen New Terminal (Pick ptui Session/Window)\nBack" | fzf --prompt="Tmux Command Center: " --height=55% --layout=reverse)
+        repo_session_status=$(summarize_tmux_repo_session "$repo_session")
+        ptui_session_count=$(tmux list-sessions -F '#S' 2>/dev/null | grep '^ptui-' | wc -l | tr -d '[:space:]')
+        choice=$(printf "[Status] Current Repo Session: %s (%s)\n[Status] ptui Sessions: %s\nAttach Here (Current Repo Session)\nOpen New Terminal (Current Repo Session)\nNew Pearl Shell (Attach Here)\nNew Pearl Shell (Open New Terminal)\nAttach Here (Pick ptui Session/Window)\nOpen New Terminal (Pick ptui Session/Window)\nBack" \
+            "$repo_session" \
+            "$repo_session_status" \
+            "$ptui_session_count" | \
+            fzf --prompt="Tmux Command Center: " --height=65% --layout=reverse)
 
         case "$choice" in
             "Back"|"")
                 return
                 ;;
+            "[Status]"*)
+                continue
+                ;;
             "Attach Here (Current Repo Session)")
                 if ! tmux has-session -t "$repo_session" 2>/dev/null; then
                     echo "No tmux session for current repo: $repo_session"
-                    read -n 1 -s -r -p "Press any key to continue..."
+                    create_missing_choice=$(printf "Create now with New Pearl Shell (Attach Here)\nBack" | fzf --prompt="Current repo session is not running: " --height=25% --layout=reverse)
+                    if [ "$create_missing_choice" = "Create now with New Pearl Shell (Attach Here)" ]; then
+                        new_pearl_id=$(select_pearl_id_for_tmux_window) || continue
+                        target=$(create_new_tmux_shell_window "$new_pearl_id")
+                        tmux attach-session -t "$target"
+                    fi
                     continue
                 fi
                 tmux attach-session -t "$repo_session"
@@ -494,7 +542,13 @@ tmux_command_center() {
             "Open New Terminal (Current Repo Session)")
                 if ! tmux has-session -t "$repo_session" 2>/dev/null; then
                     echo "No tmux session for current repo: $repo_session"
-                    read -n 1 -s -r -p "Press any key to continue..."
+                    create_missing_choice=$(printf "Create now with New Pearl Shell (Open New Terminal)\nBack" | fzf --prompt="Current repo session is not running: " --height=25% --layout=reverse)
+                    if [ "$create_missing_choice" = "Create now with New Pearl Shell (Open New Terminal)" ]; then
+                        new_pearl_id=$(select_pearl_id_for_tmux_window) || continue
+                        target=$(create_new_tmux_shell_window "$new_pearl_id")
+                        open_new_terminal_with_tmux_target "$target"
+                        read -n 1 -s -r -p "Press any key to continue..."
+                    fi
                     continue
                 fi
                 open_new_terminal_with_tmux_target "$repo_session"
