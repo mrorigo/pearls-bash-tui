@@ -18,6 +18,7 @@ It wraps common `prl` workflows (browse ready/open issues, inspect details, crea
 - New issue creation with editor-backed description
 - Configurable per-issue actions (`[Run] ...`) filtered by issue status
 - Script execution logs with failure-aware viewing
+- Tmux Command Center with live session status
 
 ## Requirements
 
@@ -33,7 +34,7 @@ Optional (if using bundled automation scripts):
 
 - `git`
 - `opencode`
-- `tmux` (only for scripts with `run_in_tmux: true`)
+- `tmux` (required for scripts with `run_in_tmux: true` and tmux menu actions)
 
 ## Installation
 
@@ -85,9 +86,10 @@ ${XDG_CONFIG_HOME:-$HOME/.config}/ptui/config.json
 Schema:
 
 - `repos`: array of absolute repo paths
-- `terminal_command` (optional): command used when opening a new terminal from `Tmux Command Center`.
-  - Supports `{{TMUX_TARGET}}` placeholder for raw target (for example `ptui-repo-123:prl-45`).
-  - Supports `{{TMUX_ATTACH_CMD}}` placeholder for a shell-escaped attach command.
+- `terminal_command` (optional): command used when opening a new terminal from `Tmux Command Center`
+  - Must be a single-line JSON string
+  - Supports `{{TMUX_TARGET}}` placeholder for raw target (for example `ptui-repo-123:prl-45`)
+  - Supports `{{TMUX_ATTACH_CMD}}` placeholder for a shell-escaped attach command
 - `scripts`: array of script descriptors
   - `name`: menu label
   - `target_status`: one of a specific status (`open`, `in_progress`, `blocked`, `deferred`, `closed`) or `any`
@@ -102,7 +104,7 @@ Example:
     "/Users/me/src/project-a",
     "/Users/me/src/project-b"
   ],
-  "terminal_command": "osascript -e 'tell application \\"Terminal\\" to do script \\"{{TMUX_ATTACH_CMD}}\\"'",
+  "terminal_command": "osascript -e 'tell application \"Terminal\" to do script \"{{TMUX_ATTACH_CMD}}\"'",
   "scripts": [
     {
       "name": "Start Agent",
@@ -126,7 +128,19 @@ Example:
 }
 ```
 
-## Runtime Environment for Scripts
+### `terminal_command` integration tips
+
+- Keep it on one line in JSON; avoid accidental line breaks inside the string.
+- On macOS Terminal.app, prefer `{{TMUX_ATTACH_CMD}}` so quoting stays shell-safe.
+- Validate config after editing:
+
+```bash
+jq . "${XDG_CONFIG_HOME:-$HOME/.config}/ptui/config.json"
+```
+
+## Runtime Environment
+
+### For configured script actions (`[Run] ...`)
 
 When you run a configured action from the issue screen, `ptui` exports:
 
@@ -147,6 +161,15 @@ Execution behavior:
   - `ptui` creates or reuses a pearl-scoped window named `<PEARL_ID>`, then attaches immediately
   - detach with `Ctrl-b d` and reattach later with `tmux attach -t ptui-<repo>-<hash>` and select the pearl window
 
+### For `New Pearl Shell` (Tmux Command Center)
+
+When you create a new pearl shell window, `ptui` starts a login shell with:
+
+- `REPO_PATH` exported to the selected repo path
+- `PEARL_ID` exported to the chosen pearl ID
+
+This makes custom shell startup scripts and agent commands immediately pearl-aware.
+
 ## Main Menu Flow
 
 1. `Ready Queue`: shows unblocked issues from `prl ready --json`
@@ -165,68 +188,131 @@ Issue action menu includes:
 
 `Tmux Command Center` supports:
 
+- Live status rows for:
+  - Current repo tmux session name and running state
+  - Count of existing `ptui-*` sessions
 - Attach in the current terminal to the current repo tmux session
 - Open a new terminal attached to the current repo tmux session
 - Create a new pearl shell window and attach in the current terminal
 - Create a new pearl shell window and open it in a new terminal
 - Pick any `ptui-*` session/window and attach in the current terminal
 - Pick any `ptui-*` session/window and open it in a new terminal
-- New-terminal actions use `terminal_command` when configured; otherwise ptui falls back to built-in defaults.
+- New-terminal actions use `terminal_command` when configured; otherwise ptui falls back to built-in defaults
+
+If the current repo session does not exist and you choose a current-repo attach/open action, `ptui` now offers a direct create-now flow so you can start a pearl shell and continue immediately.
 
 ## Bundled Scripts
 
 Repository includes:
 
+- `scripts/convert-to-epic.sh`
 - `scripts/spawn-agent.sh`
 - `scripts/remove-worktree.sh`
-- `scripts/cc-run.sh`
+- `scripts/oc-run.sh`
 
-These are examples and may require local adaptation before production use.
+These scripts form a concrete workflow for Epic decomposition and stage-based execution.
+
+### Script Responsibilities
+
+- `convert-to-epic.sh`
+  - Marks the selected pearl as an `epic`
+  - Creates 3 linked subtasks labeled:
+    - `stage:planning`
+    - `stage:implementation`
+    - `stage:verification`
+  - Links dependencies so stage order is enforced
+- `spawn-agent.sh`
+  - Creates/reuses a worktree at `$HOME/dev/worktrees/$PEARL_ID`
+  - Moves pearl status from `open` to `in_progress` (when applicable)
+  - Reads stage label and builds a stage-specific prompt
+  - Calls `oc-run.sh` to run OpenCode and log output
+- `remove-worktree.sh`
+  - Removes the per-pearl worktree
+  - Moves pearl status back to `open`
+- `oc-run.sh`
+  - Runs `opencode run` with JSON output
+  - Persists a log file and appends final response text as a pearl comment
+
+### Epic Workflow (3 Subtasks)
+
+`convert-to-epic.sh` turns one parent pearl into an epic plus three stage pearls.
+
+```mermaid
+flowchart TD
+    E[Parent Pearl] --> C[convert-to-epic.sh]
+    C --> P[plan: epic <id>\nstage:planning]
+    C --> I[implement: epic <id>\nstage:implementation]
+    C --> V[verify: epic <id>\nstage:verification]
+
+    P -->|blocks| I
+    I -->|blocks| V
+    V -->|blocks| E
+
+    C --> L[Add label: epic]
+```
+
+### Stage Execution Flow
+
+`spawn-agent.sh` uses stage labels to route work and preserve isolated repo context.
+
+```mermaid
+flowchart TD
+    A[Run script from ptui] --> B[spawn-agent.sh]
+    B --> C[Ensure worktree: $HOME/dev/worktrees/$PEARL_ID]
+    C --> D[Set status: open -> in_progress]
+    D --> E{Stage label}
+
+    E -->|stage:planning| P[Prompt: write ISSUE_PLAN.md]
+    E -->|stage:implementation| I[Prompt: implement from ISSUE_PLAN.md\nwrite ISSUE_SOLUTION.md]
+    E -->|stage:verification| V[Prompt: verify plan+solution\nwrite ISSUE_VERIFICATION.md]
+
+    P --> R[oc-run.sh]
+    I --> R
+    V --> R
+
+    R --> O[opencode run --format json]
+    O --> M[Append final text as pearl comment]
+```
+
+### Recommended ptui Config for This Workflow
+
+```json
+{
+  "scripts": [
+    {
+      "name": "Convert to Epic",
+      "target_status": "open",
+      "command": "/Users/me/src/pearls-tui/scripts/convert-to-epic.sh",
+      "run_in_tmux": false
+    },
+    {
+      "name": "Spawn Agent",
+      "target_status": "open",
+      "command": "/Users/me/src/pearls-tui/scripts/spawn-agent.sh",
+      "run_in_tmux": true
+    },
+    {
+      "name": "Continue Agent",
+      "target_status": "in_progress",
+      "command": "/Users/me/src/pearls-tui/scripts/spawn-agent.sh",
+      "run_in_tmux": true
+    },
+    {
+      "name": "Remove Worktree",
+      "target_status": "any",
+      "command": "/Users/me/src/pearls-tui/scripts/remove-worktree.sh",
+      "run_in_tmux": false
+    }
+  ]
+}
+```
 
 ### Notes
 
-- Ensure your config `command` points to real script paths on your machine.
+- Ensure config `command` paths point to real files on your machine.
 - If you use shell paths with `~`, prefer `$HOME` in script variables to avoid literal-tilde path bugs in quoted strings.
-- `scripts/cc-run.sh` currently expects OpenCode CLI and session semantics; review before relying on it for critical workflows.
-
-## Use-Case Scenarios
-
-### Multi-Stage Agent Pipeline (`plan -> execute -> verify`)
-
-Use labels and status-gated scripts to orchestrate a disciplined agent workflow:
-
-1. Create pearls with a stage label such as `plan`.
-2. Configure a script that runs only for `open` pearls and generates an implementation plan, then updates labels to `execute`.
-3. Configure a second script that runs implementation in tmux (`run_in_tmux: true`) and flips labels to `verify`.
-4. Configure a final verification script that runs tests/lints and either closes the pearl or moves it back to `execute`.
-
-This gives you a lightweight state machine without adding a custom orchestrator service.
-
-### Parallel Agent Swarms Per Repo
-
-Use the Tmux Command Center to spin up multiple pearl shell windows in the same repo-scoped tmux session:
-
-- One window per pearl for independent agent runs.
-- Shared session context for quick switching and monitoring.
-- Optional new-terminal launch behavior via `terminal_command`.
-
-This works well for batched backlog reduction or parallel bugfix campaigns.
-
-### Human-in-the-Loop Review Gates
-
-Treat `verify` as a manual approval gate:
-
-- Agent scripts can prepare patches and artifacts.
-- A reviewer attaches to the same tmux window, inspects output/logs, and runs final checks.
-- On approval, run a close/merge script; on rejection, relabel and requeue.
-
-### Incident Response Mode
-
-For production incidents, create pearls by subsystem label (`api`, `db`, `queue`) and launch dedicated tmux windows per pearl. Teams can triage, patch, and validate concurrently while preserving a single issue timeline in Pearls.
-
-### Long-Running Automation Without Losing Context
-
-Run heavy scripts (codegen, migration tests, large integration suites) via tmux-backed actions so sessions survive terminal disconnects. Reattach later from Command Center with full context and logs intact.
+- `spawn-agent.sh` intentionally refuses pearls labeled `epic`; run it on stage subtasks.
+- `convert-to-epic.sh` expects `prl`, `git`, and `jq` to be available in PATH.
 
 ## Troubleshooting
 
@@ -253,6 +339,22 @@ Use the current `ptui.sh` from this repository (contains a hardened temp-log cre
 
 Install tmux, or avoid tmux-based actions (`run_in_tmux: true` and `Tmux Command Center` terminal actions).
 
+### AppleScript error `Expected string but found end of script` when opening a new terminal
+
+This usually means your `terminal_command` in config contains a broken quoted string or an unintended newline.
+
+Use a single-line value such as:
+
+```json
+"terminal_command": "osascript -e 'tell application \"Terminal\" to do script \"{{TMUX_ATTACH_CMD}}\"'"
+```
+
+Then validate:
+
+```bash
+jq . "${XDG_CONFIG_HOME:-$HOME/.config}/ptui/config.json"
+```
+
 ### `prl` commands fail
 
 Run the same command manually (for example, `prl list --status open --json`) inside the selected repo to confirm Pearls is initialized and healthy.
@@ -263,8 +365,8 @@ Configured `scripts[].command` values are executed via `eval`.
 
 Treat `config.json` as trusted input only:
 
-- Do not run `ptui` with untrusted config files.
-- Avoid injecting user-controlled strings into `command` fields.
+- Do not run `ptui` with untrusted config files
+- Avoid injecting user-controlled strings into `command` fields
 
 ## Development
 

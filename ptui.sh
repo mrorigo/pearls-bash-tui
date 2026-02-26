@@ -744,9 +744,9 @@ list_pearls() {
         return
     fi
 
-    # Format for fzf: ID | Priority | Status | Title
+    # Format for fzf: ID | Priority | Status | Title | Labels
     local selected_line
-    selected_line=$(echo "$items_json" | jq -r '.[] | "[\(.id)] P\(.priority) (\(.status)) \(.title)"' | fzf --prompt="$prompt_msg" --height=8 --layout=reverse)
+    selected_line=$(echo "$items_json" | jq -r '.[] | "[\(.id)] P\(.priority) (\(.status)) \(.title) [labels: \(((.labels // []) | if length > 0 then join(",") else "-" end))]"' | fzf --prompt="$prompt_msg" --height=8 --layout=reverse)
 
     if [ -n "$selected_line" ]; then
         # Extract ID and Status from the selected line
