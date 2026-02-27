@@ -56,8 +56,6 @@ else
     git worktree add -b "$BRANCH_NAME" "$WORKTREE_PATH"
 fi
 
-cd "$WORKTREE_PATH" || exit 1
-
 PEARL_STATUS=$(echo "$PEARL_JSON" | jq -r '.status')
 case "$PEARL_STATUS" in
     open)
@@ -90,22 +88,6 @@ else
     PEARL_STAGE="${STAGE_LABELS[0]}"
 fi
 
-PEARL_DESC=$(prl show "$PEARL_ID" --format plain)
-
-TMP_BASE="${TMPDIR:-/tmp}"
-TMP_BASE="${TMP_BASE//$'\n'/}"
-TMP_BASE="${TMP_BASE//$'\r'/}"
-TMP_BASE="${TMP_BASE%/}"
-PROMPT_FILE=$(mktemp "${TMP_BASE}/ptui-prompt.XXXXXX" 2>/dev/null || true)
-if [ -z "$PROMPT_FILE" ]; then
-    PROMPT_FILE=$(mktemp "/tmp/ptui-prompt.XXXXXX")
-fi
-
-cleanup_prompt_file() {
-    [ -n "${PROMPT_FILE:-}" ] && rm -f "$PROMPT_FILE"
-}
-trap cleanup_prompt_file EXIT
-
 case "$PEARL_STAGE" in
     "stage:planning")
         STAGE_PROMPT="Task: Create a plan for the implementation, and store it in ISSUE_PLAN.md"
@@ -121,16 +103,6 @@ case "$PEARL_STAGE" in
         ;;
 esac
 
-cat > "$PROMPT_FILE" <<PROMPTEOF
-Here is the issue context:
-
----
-$PEARL_DESC
----
-
-$STAGE_PROMPT
-PROMPTEOF
-
 echo "-----------------------------------"
 echo "Spawning Agent in: $WORKTREE_PATH"
 echo "Branch: $BRANCH_NAME"
@@ -138,10 +110,10 @@ echo "Pearl: $PEARL_ID"
 echo "Execution context: $EXEC_CONTEXT_ID"
 echo "-----------------------------------"
 
-cat "$PROMPT_FILE"
-
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-"$SCRIPT_DIR/oc-run.sh" "$WORKTREE_PATH" "$PEARL_ID" "$PROMPT_FILE"
+OUTPUT=$("$SCRIPT_DIR/oc-run.sh" "$WORKTREE_PATH" "$PEARL_ID" "$STAGE_PROMPT")
+
+prl comments add $PEARL_ID "opencode: $OUTPUT"
 
 echo "-----------------------------------"
 echo "Agent session ended."
