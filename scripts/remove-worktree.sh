@@ -15,7 +15,11 @@ PEARL_JSON=$(prl show "$PEARL_ID" --format json)
 # Resolve execution context:
 # - If exactly one epic:<id> label exists, use <id> as shared context.
 # - Otherwise, use PEARL_ID for per-pearl execution.
-mapfile -t EPIC_CONTEXT_LABELS < <(echo "$PEARL_JSON" | jq -r '.labels[]? | select(startswith("epic:"))')
+EPIC_CONTEXT_LABELS=()
+while IFS= read -r label; do
+    EPIC_CONTEXT_LABELS+=("$label")
+done < <(echo "$PEARL_JSON" | jq -r '.labels[]? | select(startswith("epic:"))')
+
 if [ "${#EPIC_CONTEXT_LABELS[@]}" -gt 1 ]; then
     echo "FATAL: More than one epic:<id> label found on $PEARL_ID."
     exit 1
