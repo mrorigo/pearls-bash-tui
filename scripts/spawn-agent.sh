@@ -111,9 +111,11 @@ echo "Execution context: $EXEC_CONTEXT_ID"
 echo "-----------------------------------"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-OUTPUT=$("$SCRIPT_DIR/oc-run.sh" "$WORKTREE_PATH" "$PEARL_ID" "$STAGE_PROMPT")
+"$SCRIPT_DIR/oc-run.sh" "$WORKTREE_PATH" "$PEARL_ID" "$STAGE_PROMPT"
 
-prl comments add $PEARL_ID "opencode: $OUTPUT"
+TAIL=$(cat $WORKTREE_PATH/../log.$PEARL_ID.json | grep '{"type":"text"' $WORKTREE_PATH/../log.$PEARL_ID.json|tail -1|jq -r .part.text)
+
+prl comments add $PEARL_ID "opencode: $TAIL"
 
 echo "-----------------------------------"
 echo "Agent session ended."

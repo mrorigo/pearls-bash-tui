@@ -32,5 +32,3 @@ prl show "$PEARL_ID" > "$PROMPT_FILE"
 cd "$WORKTREE_PATH"
 
 opencode run --log-level DEBUG --format json --thinking "$PROMPT_INPUT" --file "$PROMPT_FILE" > ../log.$PEARL_ID.json
-
-cat ../log.$PEARL_ID.json | grep '{"type":"text"' ../log.$PEARL_ID.json|tail -1|jq -r .part.text
