@@ -1,0 +1,575 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>pearls-bash-ptui | Deterministic Ready-Queue Command Center</title>
+  <meta name="description" content="pearls-bash-ptui is a deterministic, terminal-first command center for Pearls: ready queue execution, status-gated scripts, tmux orchestration, and epic shared-context workflows." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #f4f7fb;
+      --surface: #ffffff;
+      --ink: #112136;
+      --ink-soft: #3e4e65;
+      --line: #d7e2ef;
+      --brand: #0b6cff;
+      --brand-2: #11b39f;
+      --ok: #0f8a4e;
+      --warn: #9f6420;
+      --radius: 18px;
+      --shadow: 0 14px 42px rgba(12, 35, 67, 0.12);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: "IBM Plex Sans", sans-serif;
+      color: var(--ink);
+      background:
+        radial-gradient(1100px 500px at -10% -15%, rgba(17, 179, 159, 0.16), transparent 60%),
+        radial-gradient(900px 540px at 110% 0%, rgba(11, 108, 255, 0.16), transparent 60%),
+        var(--bg);
+      line-height: 1.55;
+      overflow-x: hidden;
+    }
+
+    .bg-grid {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      opacity: 0.34;
+      background-image:
+        linear-gradient(to right, rgba(17, 33, 54, 0.05) 1px, transparent 1px),
+        linear-gradient(to bottom, rgba(17, 33, 54, 0.05) 1px, transparent 1px);
+      background-size: 28px 28px;
+      mask-image: radial-gradient(circle at center, black 40%, transparent 96%);
+      z-index: -1;
+    }
+
+    .shell {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 24px 20px 80px;
+    }
+
+    .nav {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      margin-bottom: 34px;
+    }
+
+    .logo {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      font-family: "Space Grotesk", sans-serif;
+      font-weight: 700;
+      font-size: 1.2rem;
+      letter-spacing: 0.02em;
+    }
+
+    .dot {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, var(--brand), var(--brand-2));
+      box-shadow: 0 0 0 6px rgba(11, 108, 255, 0.12);
+    }
+
+    .nav-links {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .nav-links a, .btn {
+      text-decoration: none;
+      color: var(--ink);
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.8);
+      border-radius: 999px;
+      padding: 10px 14px;
+      font-weight: 600;
+      transition: transform 160ms ease, border-color 160ms ease, background 160ms ease;
+      backdrop-filter: blur(8px);
+    }
+
+    .nav-links a:hover, .btn:hover {
+      transform: translateY(-1px);
+      border-color: #bccddd;
+      background: #fff;
+    }
+
+    .hero {
+      display: grid;
+      grid-template-columns: 1.35fr 1fr;
+      gap: 24px;
+    }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+
+    .hero-main {
+      padding: 38px;
+    }
+
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 0.85rem;
+      font-weight: 700;
+      color: var(--ok);
+      border: 1px solid #bee8d2;
+      background: #f1fcf6;
+      border-radius: 999px;
+      padding: 7px 12px;
+      margin-bottom: 18px;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+    }
+
+    h1, h2, h3 {
+      margin: 0;
+      font-family: "Space Grotesk", sans-serif;
+      letter-spacing: -0.01em;
+    }
+
+    h1 {
+      font-size: clamp(2.1rem, 4vw, 3.4rem);
+      line-height: 1.06;
+      margin-bottom: 14px;
+    }
+
+    .lead {
+      margin: 0 0 24px;
+      color: var(--ink-soft);
+      max-width: 62ch;
+      font-size: 1.04rem;
+    }
+
+    .cta-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-bottom: 16px;
+    }
+
+    .btn-primary {
+      border: none;
+      background: linear-gradient(135deg, var(--brand), #3a8aff);
+      color: #fff;
+      box-shadow: 0 10px 28px rgba(11, 108, 255, 0.28);
+    }
+
+    .terminal {
+      border: 1px solid #cbd9e9;
+      border-radius: 14px;
+      background: #fbfdff;
+      padding: 12px;
+      margin-top: 10px;
+      white-space: pre-wrap;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+      color: #0d3f89;
+      font-size: 0.88rem;
+    }
+
+    .hero-side {
+      padding: 22px;
+      display: grid;
+      gap: 12px;
+      align-content: start;
+    }
+
+    .metric {
+      border: 1px solid #d6e3f2;
+      border-radius: 14px;
+      padding: 14px;
+      background: linear-gradient(180deg, #ffffff, #f8fbff);
+    }
+
+    .metric strong {
+      display: block;
+      font-family: "Space Grotesk", sans-serif;
+      font-size: 1.45rem;
+      margin-bottom: 2px;
+    }
+
+    .metric span {
+      color: var(--ink-soft);
+      font-size: 0.92rem;
+    }
+
+    .section {
+      margin-top: 32px;
+      display: grid;
+      gap: 14px;
+    }
+
+    .grid-3 {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    .grid-2 {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    .tile {
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: var(--surface);
+      box-shadow: var(--shadow);
+      padding: 22px;
+    }
+
+    .tile h2, .tile h3 {
+      margin-bottom: 8px;
+    }
+
+    .tile p {
+      margin: 0;
+      color: var(--ink-soft);
+      font-size: 0.95rem;
+    }
+
+    .list {
+      margin: 10px 0 0;
+      padding-left: 18px;
+      color: var(--ink-soft);
+      font-size: 0.93rem;
+    }
+
+    .list li + li {
+      margin-top: 6px;
+    }
+
+    .flow {
+      margin-top: 12px;
+      border: 1px solid #d4e3f3;
+      border-radius: 12px;
+      background: #fbfdff;
+      padding: 12px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+      color: #184c8f;
+      font-size: 0.84rem;
+      white-space: pre-wrap;
+    }
+
+    .pill-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 10px;
+    }
+
+    .pill {
+      border: 1px solid #c7d8eb;
+      border-radius: 999px;
+      background: #f4f9ff;
+      color: #25558f;
+      font-size: 0.81rem;
+      font-weight: 700;
+      padding: 7px 10px;
+      white-space: nowrap;
+    }
+
+    .warn {
+      margin-top: 12px;
+      border: 1px solid #f0d9bc;
+      background: #fff8ef;
+      border-radius: 12px;
+      color: #724719;
+      padding: 10px;
+      font-size: 0.9rem;
+    }
+
+    .install {
+      border: 1px solid #cedaea;
+      border-radius: 14px;
+      background: #fbfdff;
+      padding: 10px;
+      display: grid;
+      grid-template-columns: 1fr auto;
+      align-items: center;
+      gap: 10px;
+      margin-top: 12px;
+    }
+
+    code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+      color: #0d3f89;
+      font-size: 0.89rem;
+      word-break: break-all;
+    }
+
+    .copy {
+      border: 1px solid #bfd0e4;
+      background: #fff;
+      border-radius: 10px;
+      padding: 8px 12px;
+      cursor: pointer;
+      font-weight: 700;
+      color: #214f93;
+    }
+
+    .copy:hover { background: #f0f6ff; }
+
+    .footer {
+      margin-top: 32px;
+      border-radius: 16px;
+      background: #10233b;
+      color: #dde8f6;
+      padding: 20px;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .footer a {
+      color: #abd5ff;
+      text-decoration: none;
+      font-weight: 700;
+    }
+
+    .reveal {
+      opacity: 0;
+      transform: translateY(14px);
+      transition: opacity 480ms ease, transform 480ms ease;
+    }
+
+    .reveal.show {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    @media (max-width: 980px) {
+      .hero { grid-template-columns: 1fr; }
+      .grid-3 { grid-template-columns: 1fr 1fr; }
+    }
+
+    @media (max-width: 700px) {
+      .hero-main { padding: 26px; }
+      .hero-side { padding: 18px; }
+      .grid-3, .grid-2 { grid-template-columns: 1fr; }
+      .footer { padding: 16px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="bg-grid"></div>
+  <main class="shell">
+    <nav class="nav reveal">
+      <div class="logo"><span class="dot"></span> pearls-bash-ptui</div>
+      <div class="nav-links">
+        <a href="../README.md">README</a>
+        <a href="https://github.com/mrorigo/pearls">Pearls GitHub</a>
+      </div>
+    </nav>
+
+    <section class="hero">
+      <article class="card hero-main reveal">
+        <div class="eyebrow">Deterministic Ready-Queue Workflow</div>
+        <h1>Run The Next Unblocked Pearl, The Same Way Every Time</h1>
+        <p class="lead">
+          pearls-bash-ptui is a terminal command center for Pearls. It starts from the ready queue, enforces status-aware actions,
+          and lets you execute stage subtasks (`planning`, `implementation`, `verification`) with reproducible tmux and worktree behavior.
+        </p>
+        <div class="cta-row">
+          <a class="btn btn-primary" href="../ptui.sh">Open ptui.sh</a>
+          <a class="btn" href="../README.md">Read Full README</a>
+        </div>
+        <div class="terminal">$ ./ptui.sh
+1) Ready Queue
+2) Select pearl
+3) [Run] Spawn Agent (status-gated)
+4) Reattach via Tmux Command Center
+5) Cleanup via Remove Worktree</div>
+      </article>
+
+      <aside class="card hero-side reveal">
+        <div class="metric">
+          <strong>Ready Queue First</strong>
+          <span>Uses `prl ready --json` to prioritize unblocked work.</span>
+        </div>
+        <div class="metric">
+          <strong>Deterministic Context</strong>
+          <span>`epic:&lt;id&gt;` subtasks share `agent/&lt;id&gt;` and one worktree.</span>
+        </div>
+        <div class="metric">
+          <strong>Status-Gated Actions</strong>
+          <span>Script menu only shows commands valid for the current pearl status.</span>
+        </div>
+        <div class="metric">
+          <strong>Tmux Control Plane</strong>
+          <span>Live session state, attach/open-terminal paths, and predictable naming.</span>
+        </div>
+      </aside>
+    </section>
+
+    <section class="section">
+      <div class="grid-3">
+        <article class="tile reveal">
+          <h3>Core Features</h3>
+          <ul class="list">
+            <li>Repo picker for multi-repo work.</li>
+            <li>Ready queue and all-open views.</li>
+            <li>Interactive pearl detail with update actions.</li>
+            <li>Create new pearls with editor-backed description.</li>
+            <li>JSON view and per-script execution logs.</li>
+          </ul>
+        </article>
+        <article class="tile reveal">
+          <h3>Tmux Command Center</h3>
+          <ul class="list">
+            <li>Attach/open current repo session.</li>
+            <li>Create new pearl shell windows.</li>
+            <li>Pick any `ptui-*` session/window.</li>
+            <li>Live status lines for current session and total ptui sessions.</li>
+            <li>Optional `terminal_command` placeholders for new-terminal launches.</li>
+          </ul>
+          <div class="pill-row">
+            <span class="pill">{{TMUX_TARGET}}</span>
+            <span class="pill">{{TMUX_ATTACH_CMD}}</span>
+          </div>
+        </article>
+        <article class="tile reveal">
+          <h3>Runtime Context</h3>
+          <ul class="list">
+            <li>Scripts receive `REPO_PATH` and `PEARL_ID`.</li>
+            <li>`New Pearl Shell` exports `REPO_PATH` and `PEARL_ID` in a login shell.</li>
+            <li>`run_in_tmux: true` routes execution into repository-scoped tmux sessions.</li>
+            <li>Non-tmux scripts stream output and persist logs.</li>
+          </ul>
+        </article>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="grid-2">
+        <article class="tile reveal">
+          <h2>Deterministic Ready-Queue Loop</h2>
+          <p>This is the operating model: choose unblocked work, run valid action, preserve context, repeat.</p>
+          <div class="flow">Ready Queue (`prl ready --json`)
+  -> select pearl
+  -> action menu (status-filtered scripts)
+  -> execute (`run_in_tmux` true/false)
+  -> capture logs + comments
+  -> requeue / continue / close</div>
+        </article>
+
+        <article class="tile reveal">
+          <h2>Epic + 3 Subtask Workflow</h2>
+          <p>`convert-to-epic.sh` creates three stage subtasks and links dependency order.</p>
+          <div class="flow">Parent pearl
+  -> convert-to-epic.sh
+  -> stage:planning subtask
+  -> stage:implementation subtask (blocked by planning)
+  -> stage:verification subtask (blocked by implementation)
+  -> verification blocks parent epic</div>
+        </article>
+
+        <article class="tile reveal">
+          <h2>Execution Context Resolution</h2>
+          <p>`spawn-agent.sh` and `remove-worktree.sh` use the same context rule:</p>
+          <ul class="list">
+            <li>exactly one `epic:&lt;id&gt;` label -> context is `<id>`</li>
+            <li>no `epic:` label -> context is current pearl id</li>
+            <li>more than one `epic:` label -> fail fast</li>
+          </ul>
+          <div class="flow">branch:   agent/&lt;context-id&gt;
+worktree: $HOME/dev/worktrees/&lt;context-id&gt;</div>
+          <div class="warn">`spawn-agent.sh` refuses pearls labeled `epic` directly. Run it on stage subtasks.</div>
+        </article>
+
+        <article class="tile reveal">
+          <h2>Shared Cleanup Guard</h2>
+          <p>When context is shared (`epic:&lt;id&gt;`), cleanup is intentionally conservative.</p>
+          <ul class="list">
+            <li>Removal is blocked if sibling subtasks in same epic are still `in_progress`.</li>
+            <li>Override only when intentional:</li>
+          </ul>
+          <div class="terminal">PTUI_FORCE_REMOVE=1 /path/to/remove-worktree.sh</div>
+        </article>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="grid-2">
+        <article class="tile reveal">
+          <h2>Recommended Script Set</h2>
+          <p>Use these with status gates in `config.json`:</p>
+          <ul class="list">
+            <li>`scripts/convert-to-epic.sh` (`open`)</li>
+            <li>`scripts/spawn-agent.sh` (`open`)</li>
+            <li>`scripts/spawn-agent.sh` (`in_progress`)</li>
+            <li>`scripts/remove-worktree.sh` (`any`)</li>
+          </ul>
+        </article>
+        <article class="tile reveal">
+          <h2>Run</h2>
+          <p>Launch from this repository:</p>
+          <div class="install">
+            <code id="runCmd">cd /Users/origo/src/pearls-tui &amp;&amp; ./ptui.sh</code>
+            <button class="copy" id="copyBtn" type="button">Copy</button>
+          </div>
+          <p style="margin-top: 12px;">Validate config JSON after edits:</p>
+          <div class="terminal">jq . "${XDG_CONFIG_HOME:-$HOME/.config}/ptui/config.json"</div>
+        </article>
+      </div>
+    </section>
+
+    <footer class="footer reveal">
+      <div>
+        <strong style="font-family: 'Space Grotesk', sans-serif;">pearls-ptui</strong> - deterministic, terminal-first workflow execution for Pearls.
+      </div>
+      <div>
+        <a href="../README.md">README</a>
+      </div>
+    </footer>
+  </main>
+
+  <script>
+    const reveals = document.querySelectorAll('.reveal');
+    const observer = new IntersectionObserver((entries) => {
+      entries.forEach((entry) => {
+        if (entry.isIntersecting) entry.target.classList.add('show');
+      });
+    }, { threshold: 0.15 });
+
+    reveals.forEach((el, idx) => {
+      el.style.transitionDelay = `${Math.min(idx * 70, 420)}ms`;
+      observer.observe(el);
+    });
+
+    const copyBtn = document.getElementById('copyBtn');
+    const runCmd = document.getElementById('runCmd');
+
+    copyBtn.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(runCmd.textContent.trim());
+        copyBtn.textContent = 'Copied';
+        setTimeout(() => { copyBtn.textContent = 'Copy'; }, 1400);
+      } catch (_) {
+        copyBtn.textContent = 'Select + Copy';
+      }
+    });
+  </script>
+</body>
+</html>

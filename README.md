@@ -1,6 +1,6 @@
-# pearls-ptui
+# pearls-bash-ptui
 
-`pearls-ptui` is a lightweight terminal UI for the Pearls issue tracker, built with Bash, `fzf`, and `jq`.
+`pearls-bash-ptui` is a lightweight terminal UI for the Pearls issue tracker, built with Bash, `fzf`, and `jq`.
 
 It wraps common `prl` workflows (browse ready/open issues, inspect details, create, update, and run status-gated automation scripts) into a keyboard-driven interface.
 

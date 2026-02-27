@@ -1,6 +1,9 @@
 #!/bin/bash
 # ptui: A bash/fzf TUI for the Pearls Issue Tracker
 
+PAGER=${PAGER:-less}
+JSON_VIEWER=${JSON_VIEWER:-$PAGER}
+
 # --- Dependencies Check ---
 for cmd in prl jq fzf; do
     if ! command -v "$cmd" &> /dev/null; then
@@ -634,7 +637,7 @@ action_menu() {
                 update_pearl "$pearl_id"
                 ;;
             "[View JSON]")
-                prl show "$pearl_id" --json | jq . | less
+                prl show "$pearl_id" --json | $JSON_VIEWER
                 ;;
             "[Run]"*)
                 local chosen_name="${choice#\[Run\] }"
@@ -699,13 +702,13 @@ action_menu() {
 
                     if [ "$run_rc" -ne 0 ]; then
                         echo "Opening log because command failed..."
-                        less "$run_log"
+                        "$PAGER" "$run_log"
                     fi
 
                     local post_run_action
                     post_run_action=$(printf "Back to Pearl\nView full log" | fzf --prompt="After script: " --height=20% --layout=reverse)
                     if [ "$post_run_action" = "View full log" ]; then
-                        less "$run_log"
+                        "$PAGER" "$run_log"
                     fi
                     return
                 else
